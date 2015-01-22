@@ -29,6 +29,9 @@ void print_usage(void);
 void scsi_dev(char* const dev_path);
 int check_file_state(int fd);
 int ioctl_test(int fd);
+int sg_inquiry(int fd);
+int check_status(unsigned char status, unsigned char *sense_b);
+void parse_inquiry_data(unsigned char *buffer, unsigned int len);
 
 ///////////////
 // LOCALS
@@ -119,14 +122,9 @@ void scsi_dev(char* const dev_path)
     exit(-1);
   }
 
- /* ret = check_file_state(scsi_fd);
-  if (ret < 0)
-  {
-    close(scsi_fd);
-    exit(-1);
-  }*/
-
-  ioctl_test(scsi_fd);
+  //check_file_state(scsi_fd);
+  //ioctl_test(scsi_fd);
+  sg_inquiry(scsi_fd);
   close(scsi_fd);
 }
 
@@ -179,4 +177,95 @@ int check_file_state(int fd)
   printf("Last file modification:   %s", ctime(&f_stat.st_mtime));
  
   return 0;
+}
+
+int sg_inquiry(int fd)
+{
+  struct sg_io_hdr io_hdr;
+  unsigned char cmd[6];
+  unsigned char databuffer[512];
+  unsigned char sense_b[64];
+
+  memset(sense_b, 0, 64);
+  memset(databuffer, 0, 512);
+  memset(&io_hdr, 0, sizeof(struct sg_io_hdr));
+
+  // build inquiry command, refer to SPC3, section 6.4 INQUIRY command
+  cmd[0] = 0x12;     // INQUIRY command
+  cmd[1] = 0;        // bit 0 EVPD is ZERO
+  cmd[2] = 0;        // page code is ZERO
+  cmd[3] = 0;        // high byte of allocation length
+  cmd[4] = 36;       // low byte of allocation length
+  cmd[5] = 0;        // control byte
+
+  // build sg_io_hdr
+  io_hdr.cmdp = cmd;
+  io_hdr.cmd_len = sizeof(cmd);
+  io_hdr.dxferp = databuffer;
+  io_hdr.dxfer_len = 36;
+  io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+
+  io_hdr.interface_id = 'S';    // ????
+  io_hdr.mx_sb_len = 64;        // sizeof(sense_b)
+  io_hdr.sbp = sense_b;
+  io_hdr.pack_id = 0;           // ????
+  io_hdr.timeout = 60 * 1000;   // 60 seconds
+
+  // send command
+  if (ioctl(fd, SG_IO, &io_hdr) < 0)
+  {
+    lasterror = errno;
+    printf("Send command failed (%d) - %s\n", lasterror, strerror(lasterror));
+    return -1;
+  }
+
+  // check status
+  if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+    return -1;
+
+  // parse inquiry data
+  parse_inquiry_data(io_hdr.dxferp, io_hdr.dxfer_len);
+
+  return 0;
+}
+
+int check_status(unsigned char status, unsigned char *sense_b)
+{
+  if (status)
+  {
+    printf("return status %x\n", status);
+    return -1;
+  }
+
+  return 0;
+}
+
+void parse_inquiry_data(unsigned char *buffer, unsigned int len)
+{
+  int i;
+
+  printf("Peripheral device type %x\n", buffer[0] & 0x1F);
+  printf("Peripheral qualifier %x\n", (buffer[0] & 0xE0) >> 5);
+  printf("Version %x\n", buffer[2]);
+  printf("Additional length %d\n", buffer[4]);
+  printf("T10 vendor identification ");
+  for (i = 0; i < 8; i++)
+  {
+    printf("%c", buffer[8+i]);
+  }
+  printf("\n");
+
+  printf("Product identification ");
+  for (i = 0; i < 16; i++)
+  {
+    printf("%c", buffer[16+i]);
+  }
+  printf("\n");
+
+  printf("Product revision level ");
+  for (i = 0; i < 4; i++)
+  {
+    printf("%c", buffer[32+i]);
+  }
+  printf("\n");
 }
