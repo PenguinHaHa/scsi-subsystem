@@ -32,6 +32,8 @@ int ioctl_test(int fd);
 int sg_inquiry(int fd);
 int check_status(unsigned char status, unsigned char *sense_b);
 void parse_inquiry_data(unsigned char *buffer, unsigned int len);
+int ata_pass_through_identify(int fd);
+void parse_identify_data(unsigned char *buffer, unsigned int len);
 
 ///////////////
 // LOCALS
@@ -122,10 +124,82 @@ void scsi_dev(char* const dev_path)
     exit(-1);
   }
 
-  //check_file_state(scsi_fd);
-  //ioctl_test(scsi_fd);
-  sg_inquiry(scsi_fd);
+//  printf("Check file state:\n");
+//  check_file_state(scsi_fd);
+  
+ // printf("\nioctl test:\n");
+//  ioctl_test(scsi_fd);
+//  printf("\nInquiry:\n");
+//  sg_inquiry(scsi_fd);
+
+  printf("This is ATA COMMAND PASS THROUGH\n");
+  ata_pass_through_identify(scsi_fd);
+
   close(scsi_fd);
+}
+
+int ata_pass_through_identify(int fd)
+{
+  struct sg_io_hdr io_hdr;
+  unsigned char cmd[16];
+  unsigned char databuffer[512];
+  unsigned char sense_b[32];
+  int protocol = 4;   // PIO data-in
+  int extend = 0;
+  int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int t_dir = 1;      // from device
+  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+
+  memset(sense_b, 0, 32);
+  memset(databuffer, 0, 512);
+  memset(&io_hdr, 0, sizeof(struct sg_io_hdr));
+
+  // build ata pass throung command, refer to ATA Command Pass_Through
+  cmd[0] = 0x85;     // ATA PASS-THROUGH(16) command
+  cmd[1] = (protocol << 1) | extend; 
+  cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
+  cmd[6] = 1;        // 1 sector count data
+  cmd[14] = 0xec;    // IDENTIFY DEVICE
+
+  // build sg_io_hdr
+  io_hdr.cmdp = cmd;
+  io_hdr.cmd_len = sizeof(cmd);
+  io_hdr.dxferp = databuffer;
+  io_hdr.dxfer_len = 512;
+  io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+
+  io_hdr.interface_id = 'S';    // ????
+  io_hdr.mx_sb_len = sizeof(sense_b);        // sizeof(sense_b)
+  io_hdr.sbp = sense_b;
+  io_hdr.pack_id = 0;           // ????
+  io_hdr.timeout = 20 * 1000;   // 60 seconds
+
+  // send command
+  if (ioctl(fd, SG_IO, &io_hdr) < 0)
+  {
+    lasterror = errno;
+    printf("Send command failed (%d) - %s\n", lasterror, strerror(lasterror));
+    return -1;
+  }
+
+  // check status
+  if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+    return -1;
+  
+  // parse inquiry data
+  parse_identify_data(io_hdr.dxferp, io_hdr.dxfer_len);
+  
+  return 0;
+}
+
+void parse_identify_data(unsigned char *buffer, unsigned int len)
+{
+  int i;
+
+  printf("Identify data: \n");
+  printf("Serial number %s\n", buffer + 20);
+  printf("Model number %s\n", buffer + 54);
 }
 
 int ioctl_test(int fd)
