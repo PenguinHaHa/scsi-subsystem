@@ -120,13 +120,12 @@ void scsi_dev(char* const dev_path)
 //  printf("Check file state:\n");
 //  check_file_state(scsi_fd);
   
- // printf("\nioctl test:\n");
+//  printf("\nioctl test:\n");
 //  ioctl_test(scsi_fd);
 //  printf("\nInquiry:\n");
 //  sg_inquiry(scsi_fd);
 
   printf("This is ATA COMMAND PASS THROUGH\n");
-//  ata_pass_through_identify(scsi_fd);
   dev_identify(scsi_fd);
 
   close(scsi_fd);

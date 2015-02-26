@@ -7,8 +7,20 @@
 #include <errno.h>
 #include <string.h>
 #include <scsi/sg.h>
+#include <scsi/scsi.h>
 
 #include "command.h"
+
+#define MAX_LENGTH_OUTPUT  512
+
+// The host associated with the device's fd either has a host dependent information string or failing that its name, output into the given
+// structure. Note that the output starts at the begining of given structure(overwriting the input length).
+// N.B, a trailing '\0' may need to be put on the output string if it has been truncated by the input length.
+// A return value of 1 indicates the host is present, 0 indicates that the host isn't present and a negative value indicated an error
+typedef union _PROBE_HOST_ {
+  unsigned int length;                   // max length of output ASCII string
+  char buffer[MAX_LENGTH_OUTPUT];
+} PROBE_HOST;
 
 ///////////////
 // PROTOTYPE
@@ -107,9 +119,10 @@ void parse_identify_data(unsigned char *buffer, unsigned int len)
 
 int ioctl_test(int fd)
 {
+  int ret;
   int version;
  
-  if (ioctl(fd, SG_GET_VERSION_NUM, &version) < 0)
+  if (ioctl(fd, SG_GET_VERSION_NUM, &version) != 0)
   {
     lasterror = errno;
     printf("Ioctl SG_GET_VERSION_NUM failed (%d) - %s\n", lasterror, strerror(lasterror));
@@ -117,6 +130,24 @@ int ioctl_test(int fd)
   }
 
   printf("Version number %o\n", version);
+  // SCSI_IOCTL_PROBE_HOST
+  PROBE_HOST probe_host;
+  probe_host.length = MAX_LENGTH_OUTPUT;
+  ret = ioctl(fd, SCSI_IOCTL_PROBE_HOST, &probe_host);
+  if (ret < 0) // 1 : host present, 0 : host is not present
+  {
+    lasterror = errno;
+    printf("Ioctl SCSI_IO_PROBE_HOST failed (%d) - %s\n", lasterror, strerror(lasterror));
+    return -1;
+  }
+  else if (ret == 0)
+  {
+    printf("Host is not present\n");
+    return 0;
+  }
+
+  printf("host info %s\n", probe_host.buffer);
+
   return 0;
 }
 
