@@ -27,6 +27,13 @@ void parse_options(PARAMETER *param, int argc, char **argv);
 void print_usage(void);
 void scsi_dev(char* const dev_path);
 int check_file_state(int fd);
+void parse_identify_data(unsigned char *buffer, unsigned int len);
+void get_identifydata(int fd);
+void parse_smart_data(unsigned char *buffer, unsigned int len);
+void get_smartdata(int fd);
+void get_smartlogdir(int fd);
+void parse_smart_log(unsigned char *buffer, unsigned int len);
+void read_data(int fd);
 
 ///////////////
 // LOCALS
@@ -126,11 +133,99 @@ void scsi_dev(char* const dev_path)
 //  sg_inquiry(scsi_fd);
 
   printf("This is ATA COMMAND PASS THROUGH\n");
-  dev_identify(scsi_fd);
+  get_identifydata(scsi_fd);
+//  get_smartdata(scsi_fd);
+//  get_smartlogdir(scsi_fd);
+  read_data(scsi_fd);
 
   close(scsi_fd);
 }
 
+void read_data(int fd)
+{
+  unsigned int startlba = 0;
+  unsigned int sectors = 10;
+  unsigned int ncqtag = 3;
+  unsigned int isread = 1;
+  char *databuffer;
+
+  databuffer = (char *)malloc(512 * sectors);
+  memset(databuffer, 0, 512 * sectors);
+
+  fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
+
+  free(databuffer);
+}
+
+void get_smartlogdir(int fd)
+{
+  char *smartlog;
+  unsigned int isread = 1;
+  unsigned int logaddr = 0;
+
+  smartlog = (char *)malloc(512);
+  memset(smartlog, 0, 512);
+
+  smart_readwritelog(fd, isread, logaddr, smartlog, 1);
+  
+  parse_smart_log(smartlog, 512);
+
+}
+
+void parse_smart_log(unsigned char *buffer, unsigned int len)
+{
+  int i;
+  printf("smart log dir : ");
+  for (i = 0; i < len; i++)
+  {
+    printf("%d:%x | ", i, buffer[i]);
+  }
+  printf("\n");
+}
+
+void get_smartdata(int fd)
+{
+  char *smartdata;
+
+  smartdata = (char *)malloc(512);
+  memset(smartdata, 0, 512);
+
+  smart_readdata(fd, smartdata);
+
+  parse_smart_data(smartdata, 512);
+}
+
+void parse_smart_data(unsigned char *buffer, unsigned int len)
+{
+
+  printf("SMART data : \n");
+  printf("Off-line data collection status: 0x%02x\n", buffer[362]);
+  printf("Self-test execution status byte: 0x%02x\n", buffer[363]);
+  printf("Total time in seconds to complete off-line data collection activity: 0x%02x%02x s\n", buffer[365], buffer[364]);
+  printf("Short self-test routine recommended polling time in minutes : 0x%02x m\n", buffer[372]);
+  printf("Extended self-test routine recommended polling time in minutes: 0x%02x m\n", buffer[373]);
+  printf("Conveyance self-test routine recommended polling time in minutes: 0x%02x m \n", buffer[374]);
+}
+
+void get_identifydata(int fd)
+{
+  char *identifydata;
+
+  identifydata = (char *)malloc(512);
+  memset(identifydata, 0, 512);
+
+  identify_func(fd, identifydata);
+  
+  parse_identify_data(identifydata, 512);
+}
+
+void parse_identify_data(unsigned char *buffer, unsigned int len)
+{
+
+  printf("Identify data: \n");
+  printf("Serial number %s\n", buffer + 20);
+  printf("Model number %s\n", buffer + 54);
+}
 
 int check_file_state(int fd)
 {

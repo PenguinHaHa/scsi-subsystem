@@ -12,6 +12,7 @@
 #include "command.h"
 
 #define MAX_LENGTH_OUTPUT  512
+#define SENSE_CODE_LENGTH  64
 
 // The host associated with the device's fd either has a host dependent information string or failing that its name, output into the given
 // structure. Note that the output starts at the begining of given structure(overwriting the input length).
@@ -28,7 +29,6 @@ typedef union _PROBE_HOST_ {
 int ata_pass_through_data(int fd, char *cmd, int cmdsize, void *databuffer, int buffersize);
 int check_status(unsigned char status, unsigned char *sense_b);
 void parse_inquiry_data(unsigned char *buffer, unsigned int len);
-void parse_identify_data(unsigned char *buffer, unsigned int len);
 
 ///////////////
 // LOCALS
@@ -42,9 +42,10 @@ static int lasterror;
 int ata_pass_through_data(int fd, char *cmd, int cmdsize, void *databuffer, int buffersize)
 {
   struct sg_io_hdr io_hdr;
-  unsigned char sense_b[64];     // buffer size QQQQ:????
+  unsigned char sense_b[SENSE_CODE_LENGTH];     // buffer size QQQQ:????
   
   memset(&io_hdr, 0, sizeof(struct sg_io_hdr));
+  memset(sense_b, 0, SENSE_CODE_LENGTH);
 
   io_hdr.cmdp = cmd;
   io_hdr.cmd_len = cmdsize;
@@ -73,11 +74,82 @@ int ata_pass_through_data(int fd, char *cmd, int cmdsize, void *databuffer, int 
   return 0;
 }
 
-int dev_identify(int fd)
+int fpdma_readwrite(int fd, unsigned int isread, unsigned int ncqtag, unsigned int startlba, unsigned int sectors, char *databuffer)
 {
   int ret;
   unsigned char cmd[16];
-  unsigned char databuffer[512];
+
+  int protocol = 7;   // DMA Queued
+  int extend = 0;
+  int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
+  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  int t_length = 1;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+
+  memset(cmd, 0, sizeof(cmd));
+  
+  // build ata pass through command
+  cmd[0] = 0x85;
+  cmd[1] = (protocol << 1) | extend;
+  cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
+  cmd[3] = (sectors >> 8) & 0xFF;        // transferred secotors size, FEATURES high byte
+  cmd[4] = sectors & 0xFF;               // transferred sectors size, FEATURES low byte
+  cmd[6] = ncqtag << 3;
+  cmd[8] = startlba & 0xFF;
+  cmd[10] = (startlba >> 8) & 0xFF;
+  cmd[12] = (startlba >> 16) & 0xFF;
+  cmd[13] = 0x40;                         // bit 7 FUA set to zero
+  cmd[14] = isread ? 0x60 : 0x61;        // 0x60: read fpdma, 0x61 write fpdma
+  
+  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, sectors * 512);
+  if (ret != 0)
+  {
+    printf("ERROR, %s: line %d\n", __func__, __LINE__);
+    return -1;
+  }
+
+  return 0;
+}
+
+int smart_readwritelog(int fd, unsigned int isread, unsigned int logaddr, void *databuffer, unsigned int pagenum)
+{
+  int ret;
+  unsigned char cmd[16];
+
+  int protocol = isread ? 4 : 5;   //4:PIO data-in, 5:PIO data-out
+  int extend = 0;
+  int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
+  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+  
+  memset(cmd, 0, sizeof(cmd));
+  
+  // build ata pass through command
+  cmd[0] = 0x85;
+  cmd[1] = (protocol << 1) | extend;
+  cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
+  cmd[4] = isread ? 0xD5 : 0xD6;        // SMART READ LOG 
+  cmd[6] = pagenum;     // page num
+  cmd[8] = logaddr;     // LBA LOW, log addr
+  cmd[10] = 0x4F;       // LBA MID
+  cmd[12] = 0xC2;       // LBA HIGH
+  cmd[14] = 0xB0;       // SMART
+  
+  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, pagenum * 512);
+  if (ret != 0)
+  {
+    printf("ERROR, %s: line %d\n", __func__, __LINE__);
+    return -1;
+  }
+
+  return 0;
+}
+
+int smart_readdata(int fd, char *databuffer)
+{
+  int ret;
+  unsigned char cmd[16];
 
   int protocol = 4;   // PIO data-in
   int extend = 0;
@@ -87,7 +159,41 @@ int dev_identify(int fd)
   int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
   
   memset(cmd, 0, sizeof(cmd));
-  memset(databuffer, 0, sizeof(databuffer));
+  
+  // build ata pass through command
+  cmd[0] = 0x85;
+  cmd[1] = (protocol << 1) | extend;
+  cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
+  cmd[4] = 0xD0;      // SMART READ DATA
+  cmd[6] = 1;         // data length
+  cmd[10] = 0x4F;     // LBA MID
+  cmd[12] = 0xC2;     // LBA HIGH
+  cmd[14] = 0xB0;     // SMART
+  
+  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, 512);
+  if (ret != 0)
+  {
+    printf("ERROR, %s: line %d\n", __func__, __LINE__);
+    return -1;
+  }
+
+  return 0;
+}
+
+
+int identify_func(int fd, char *databuffer)
+{
+  int ret;
+  unsigned char cmd[16];
+
+  int protocol = 4;   // PIO data-in
+  int extend = 0;
+  int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int t_dir = 1;      // from device
+  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+  
+  memset(cmd, 0, sizeof(cmd));
 
   // build ata pass throung command, refer to ATA Command Pass_Through
   cmd[0] = 0x85;     // ATA PASS-THROUGH(16) command
@@ -96,25 +202,14 @@ int dev_identify(int fd)
   cmd[6] = 1;        // 1 sector count data
   cmd[14] = 0xec;    // IDENTIFY DEVICE
 
-  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, sizeof(databuffer));
+  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, 512);
   if (ret != 0)
   {
     printf("ERROR, %s: line %d\n", __func__, __LINE__);
     return -1;
   }
 
-  parse_identify_data(databuffer, sizeof(databuffer));
-  
   return 0;
-}
-
-void parse_identify_data(unsigned char *buffer, unsigned int len)
-{
-  int i;
-
-  printf("Identify data: \n");
-  printf("Serial number %s\n", buffer + 20);
-  printf("Model number %s\n", buffer + 54);
 }
 
 int ioctl_test(int fd)
@@ -203,9 +298,39 @@ int sg_inquiry(int fd)
 
 int check_status(unsigned char status, unsigned char *sense_b)
 {
+  int i;
+  int response_code;
+
   if (status)
   {
     printf("return status %x\n", status);
+    printf("sense code : ");
+    response_code = 0x7F & sense_b[0];
+    switch (response_code)
+    {
+      // Fixed format sense data, refer to spc-4 section 4.5.3
+      case 0x70:
+      case 0x71:
+        printf("sense key %x | ", sense_b[2] & 0xF);
+        printf("additional sense code %x | ", sense_b[12]);
+        printf("additional sense code Q %x | ", sense_b[13]);
+        break;
+
+      // Descriptor format sense data, refer to spc-4 section 4.5.2
+      case 0x72:
+      case 0x73:
+        printf("sense key %x | ", sense_b[1] & 0xF);
+        printf("additional sense code %x | ", sense_b[2]);
+        printf("additional sense code Q %x | ", sense_b[3]);
+        break;
+
+    }
+//    for (i = 0; i < SENSE_CODE_LENGTH; i++)
+//    {
+//      printf(" 0x%x ", sense_b[i]);
+//    }
+//    printf("\n");
+  
     return -1;
   }
 
