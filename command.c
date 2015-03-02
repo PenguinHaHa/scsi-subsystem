@@ -26,7 +26,7 @@ typedef union _PROBE_HOST_ {
 ///////////////
 // PROTOTYPE
 ///////////////
-int ata_pass_through_data(int fd, char *cmd, int cmdsize, void *databuffer, int buffersize);
+int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *databuffer, int buffersize);
 int check_status(unsigned char status, unsigned char *sense_b);
 void parse_inquiry_data(unsigned char *buffer, unsigned int len);
 
@@ -39,7 +39,7 @@ static int lasterror;
 // FUNCTIONS
 ///////////////
 
-int ata_pass_through_data(int fd, char *cmd, int cmdsize, void *databuffer, int buffersize)
+int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *databuffer, int buffersize)
 {
   struct sg_io_hdr io_hdr;
   unsigned char sense_b[SENSE_CODE_LENGTH];     // buffer size QQQQ:????
@@ -51,7 +51,7 @@ int ata_pass_through_data(int fd, char *cmd, int cmdsize, void *databuffer, int 
   io_hdr.cmd_len = cmdsize;
   io_hdr.dxferp = databuffer;
   io_hdr.dxfer_len = buffersize;
-  io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+  io_hdr.dxfer_direction = isread ? SG_DXFER_FROM_DEV : SG_DXFER_TO_DEV;
 
   io_hdr.interface_id = 'S';     // m:wqeans SCSI Generic driver interface 
   io_hdr.mx_sb_len = sizeof(sense_b);
@@ -72,6 +72,41 @@ int ata_pass_through_data(int fd, char *cmd, int cmdsize, void *databuffer, int 
     return -1;
 
   return 0;
+}
+
+int sectors_readwrite(int fd, unsigned int isread, unsigned int startlba, unsigned int sectors, char *databuffer)
+{
+  int ret;
+  unsigned char cmd[16];
+
+  int protocol = isread ? 4 : 5;
+  int extend = 0;
+  int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
+  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+
+  memset(cmd, 0, sizeof(cmd));
+
+  // build ata pass through command
+  cmd[0] = 0x85;
+  cmd[1] = (protocol << 1) | extend;
+  cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
+  cmd[6] = sectors;
+  cmd[8] = startlba & 0xFF;
+  cmd[10] = (startlba >> 8) & 0xFF;
+  cmd[12] = (startlba >> 16) & 0xFF;
+  cmd[14] = isread ? 0x20 : 0x30;
+
+  ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, sectors * 512);
+  if (ret != 0)
+  {
+    printf("ERROR, %s: line %d\n", __func__, __LINE__);
+    return -1;
+  }
+
+  return 0;
+  
 }
 
 int fpdma_readwrite(int fd, unsigned int isread, unsigned int ncqtag, unsigned int startlba, unsigned int sectors, char *databuffer)
@@ -101,7 +136,7 @@ int fpdma_readwrite(int fd, unsigned int isread, unsigned int ncqtag, unsigned i
   cmd[13] = 0x40;                         // bit 7 FUA set to zero
   cmd[14] = isread ? 0x60 : 0x61;        // 0x60: read fpdma, 0x61 write fpdma
   
-  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, sectors * 512);
+  ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, sectors * 512);
   if (ret != 0)
   {
     printf("ERROR, %s: line %d\n", __func__, __LINE__);
@@ -136,7 +171,7 @@ int smart_readwritelog(int fd, unsigned int isread, unsigned int logaddr, void *
   cmd[12] = 0xC2;       // LBA HIGH
   cmd[14] = 0xB0;       // SMART
   
-  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, pagenum * 512);
+  ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, pagenum * 512);
   if (ret != 0)
   {
     printf("ERROR, %s: line %d\n", __func__, __LINE__);
@@ -170,7 +205,7 @@ int smart_readdata(int fd, char *databuffer)
   cmd[12] = 0xC2;     // LBA HIGH
   cmd[14] = 0xB0;     // SMART
   
-  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, 512);
+  ret = ata_pass_through_data(fd, 1, cmd, sizeof(cmd), databuffer, 512);
   if (ret != 0)
   {
     printf("ERROR, %s: line %d\n", __func__, __LINE__);
@@ -202,7 +237,7 @@ int identify_func(int fd, char *databuffer)
   cmd[6] = 1;        // 1 sector count data
   cmd[14] = 0xec;    // IDENTIFY DEVICE
 
-  ret = ata_pass_through_data(fd, cmd, sizeof(cmd), databuffer, 512);
+  ret = ata_pass_through_data(fd, 1, cmd, sizeof(cmd), databuffer, 512);
   if (ret != 0)
   {
     printf("ERROR, %s: line %d\n", __func__, __LINE__);
