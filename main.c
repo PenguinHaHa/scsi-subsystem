@@ -143,7 +143,7 @@ void scsi_dev(char* const dev_path)
 
 void read_data(int fd)
 {
-  unsigned int startlba = 0x6000;
+  unsigned int startlba = 1;
   unsigned int sectors = 1;
   unsigned int ncqtag = 3;
   unsigned int isread = 1;
@@ -154,6 +154,14 @@ void read_data(int fd)
 
   fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
   sectors_readwrite(fd, isread, startlba, sectors, databuffer);
+
+  int i;
+  printf("sector %d: \n", startlba);
+  for (i= 0; i < 512; i++)
+  {
+    printf("%d:%x | ", i, databuffer[i]);
+  }
+  printf("\n");
 
   free(databuffer);
 }

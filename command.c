@@ -96,6 +96,7 @@ int sectors_readwrite(int fd, unsigned int isread, unsigned int startlba, unsign
   cmd[8] = startlba & 0xFF;
   cmd[10] = (startlba >> 8) & 0xFF;
   cmd[12] = (startlba >> 16) & 0xFF;
+  cmd[13] = 0xE0;
   cmd[14] = isread ? 0x20 : 0x30;
 
   ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, sectors * 512);
