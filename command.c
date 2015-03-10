@@ -224,7 +224,8 @@ int identify_func(int fd, char *databuffer)
 
   int protocol = 4;   // PIO data-in
   int extend = 0;
-  int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  //int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int ck_cond  = 1;   // SATL always return with CHECK CONDITION
   int t_dir = 1;      // from device
   int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
   int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
