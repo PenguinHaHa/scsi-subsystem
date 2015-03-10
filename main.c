@@ -128,15 +128,15 @@ void scsi_dev(char* const dev_path)
 //  check_file_state(scsi_fd);
   
 //  printf("\nioctl test:\n");
-//  ioctl_test(scsi_fd);
+  ioctl_test(scsi_fd);
 //  printf("\nInquiry:\n");
 //  sg_inquiry(scsi_fd);
 
-  printf("This is ATA COMMAND PASS THROUGH\n");
+//  printf("This is ATA COMMAND PASS THROUGH\n");
   get_identifydata(scsi_fd);
-//  get_smartdata(scsi_fd);
+  get_smartdata(scsi_fd);
 //  get_smartlogdir(scsi_fd);
-  read_data(scsi_fd);
+//  read_data(scsi_fd);
 
   close(scsi_fd);
 }

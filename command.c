@@ -288,6 +288,7 @@ int sg_inquiry(int fd)
   unsigned char cmd[6];
   unsigned char databuffer[512];
   unsigned char sense_b[64];
+  unsigned int datalength = 36;
 
   memset(sense_b, 0, 64);
   memset(databuffer, 0, 512);
@@ -298,14 +299,14 @@ int sg_inquiry(int fd)
   cmd[1] = 0;        // bit 0 EVPD is ZERO
   cmd[2] = 0;        // page code is ZERO
   cmd[3] = 0;        // high byte of allocation length
-  cmd[4] = 36;       // low byte of allocation length
+  cmd[4] = datalength;       // low byte of allocation length
   cmd[5] = 0;        // control byte
 
   // build sg_io_hdr
   io_hdr.cmdp = cmd;
   io_hdr.cmd_len = sizeof(cmd);
   io_hdr.dxferp = databuffer;
-  io_hdr.dxfer_len = 36;
+  io_hdr.dxfer_len = datalength;
   io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
 
   io_hdr.interface_id = 'S';    // ????
@@ -325,6 +326,46 @@ int sg_inquiry(int fd)
   // check status
   if (check_status(io_hdr.status, io_hdr.sbp) != 0)
     return -1;
+  
+  datalength = databuffer[4] + 5;
+  if (datalength > 36)
+  {
+    memset(sense_b, 0, 64);
+    memset(databuffer, 0, 512);
+    memset(&io_hdr, 0, sizeof(struct sg_io_hdr));
+
+    // build inquiry command, refer to SPC3, section 6.4 INQUIRY command
+    cmd[0] = 0x12;     // INQUIRY command
+    cmd[1] = 0;        // bit 0 EVPD is ZERO
+    cmd[2] = 0;        // page code is ZERO
+    cmd[3] = 0;        // high byte of allocation length
+    cmd[4] = datalength;       // low byte of allocation length
+    cmd[5] = 0;        // control byte
+
+    // build sg_io_hdr
+    io_hdr.cmdp = cmd;
+    io_hdr.cmd_len = sizeof(cmd);
+    io_hdr.dxferp = databuffer;
+    io_hdr.dxfer_len = datalength;
+    io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+
+    io_hdr.interface_id = 'S';    // ????
+    io_hdr.mx_sb_len = 64;        // sizeof(sense_b)
+    io_hdr.sbp = sense_b;
+    io_hdr.pack_id = 0;           // ????
+    io_hdr.timeout = 60 * 1000;   // 60 seconds
+
+    // send command
+    if (ioctl(fd, SG_IO, &io_hdr) < 0)
+    {
+      lasterror = errno;
+      printf("Send command failed (%d) - %s\n", lasterror, strerror(lasterror));
+      return -1;
+    }
+    // check status
+    if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+      return -1;
+  }
 
   // parse inquiry data
   parse_inquiry_data(io_hdr.dxferp, io_hdr.dxfer_len);
@@ -401,4 +442,16 @@ void parse_inquiry_data(unsigned char *buffer, unsigned int len)
     printf("%c", buffer[32+i]);
   }
   printf("\n");
+
+  if ((buffer[4] + 4) > 58)
+  {
+    int top;
+    printf("Version Descriptor ");
+    top = ((buffer[4] + 4) > 74) ? 73 : (buffer[4] + 4 - 1);
+    for (i = 58; i < top; i+=2)
+    {
+      printf("%02x%02x ", buffer[i], buffer[i + 1]);
+    }
+    printf("\n");
+  }
 }
