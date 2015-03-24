@@ -39,12 +39,14 @@ void read_data(int fd);
 // LOCALS
 ///////////////
 static int lasterror;
-const char* const short_options = "hd:";
+const char* const short_options = "hd:D";
 const struct option long_options[] = {
   {"help", 0, NULL, 'h'},
-  {"devpath", 1, NULL, 'd'}
+  {"devpath", 1, NULL, 'd'},
+  {"debug", 0, NULL, 'D'}
 };
 
+extern unsigned int isDebug;
 ///////////////
 // FUNCTIONS
 ///////////////
@@ -65,6 +67,7 @@ void print_usage(void)
 {
   printf("  -h  --help     Display usage information\n");
   printf("  -d  --devpath  Specify test scsi device path\n");
+  printf("  -D  --debug    print debug info\n");
 }
 
 void parse_options(PARAMETER *param, int argc, char **argv)
@@ -90,6 +93,10 @@ void parse_options(PARAMETER *param, int argc, char **argv)
       case 'd':
         opt_arg = optarg;
         strcpy(param->dev_path, opt_arg);
+        break;
+
+      case 'D':
+        isDebug = 1;
         break;
 
       case -1:

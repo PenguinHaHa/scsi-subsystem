@@ -27,7 +27,7 @@ typedef union _PROBE_HOST_ {
 // PROTOTYPE
 ///////////////
 int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *databuffer, int buffersize);
-int check_status(unsigned char status, unsigned char *sense_b);
+static int check_status(struct sg_io_hdr *io_hdr, unsigned char *sense_b);
 void parse_inquiry_data(unsigned char *buffer, unsigned int len);
 static void parse_mode_page(char *buffer, unsigned int len);
 
@@ -35,7 +35,7 @@ static void parse_mode_page(char *buffer, unsigned int len);
 // LOCALS
 ///////////////
 static int lasterror;
-
+unsigned int isDebug = 0;
 ///////////////
 // FUNCTIONS
 ///////////////
@@ -69,7 +69,7 @@ int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *data
   }
 
   // check status
-  if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+  if (check_status(&io_hdr, io_hdr.sbp) != 0)
     return -1;
 
   return 0;
@@ -336,7 +336,7 @@ int sg_mode(int fd)
   }
 
   // check status
-  if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+  if (check_status(&io_hdr, io_hdr.sbp) != 0)
     return -1;
   
   datalength = (databuffer[0] << 8 | databuffer[1]) + 2;
@@ -366,7 +366,7 @@ int sg_mode(int fd)
     }
 
     // check status
-    if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+    if (check_status(&io_hdr, io_hdr.sbp) != 0)
       return -1;
   }
 
@@ -428,7 +428,7 @@ int sg_inquiry(int fd)
   }
 
   // check status
-  if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+  if (check_status(&io_hdr, io_hdr.sbp) != 0)
     return -1;
   
   datalength = databuffer[4] + 5;
@@ -467,7 +467,7 @@ int sg_inquiry(int fd)
       return -1;
     }
     // check status
-    if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+    if (check_status(&io_hdr, io_hdr.sbp) != 0)
       return -1;
   }
 
@@ -477,42 +477,66 @@ int sg_inquiry(int fd)
   return 0;
 }
 
-int check_status(unsigned char status, unsigned char *sense_b)
+static int check_status(struct sg_io_hdr *io_hdr, unsigned char *sense_b)
 {
   int i;
   int response_code;
+  unsigned int sk;
+  unsigned int asc;
+  unsigned int ascq;
 
-  if (status)
+  if (io_hdr->status == 2)
   {
-    printf("return status %x\n", status);
-    printf("sense code : ");
     response_code = 0x7F & sense_b[0];
     switch (response_code)
     {
       // Fixed format sense data, refer to spc-4 section 4.5.3
       case 0x70:
       case 0x71:
-        printf("sense key %x | ", sense_b[2] & 0xF);
-        printf("additional sense code %x | ", sense_b[12]);
-        printf("additional sense code Q %x | ", sense_b[13]);
+        sk = sense_b[2] & 0xF;
+        asc = sense_b[12];
+        ascq = sense_b[13];
         break;
 
       // Descriptor format sense data, refer to spc-4 section 4.5.2
       case 0x72:
       case 0x73:
-        printf("sense key %x | ", sense_b[1] & 0xF);
-        printf("additional sense code %x | ", sense_b[2]);
-        printf("additional sense code Q %x | ", sense_b[3]);
+        sk = sense_b[1] & 0xF;
+        asc = sense_b[2];
+        ascq = sense_b[3];
+        break;
+
+      default:
+        printf("unsupported format sense data\n");
         break;
 
     }
-//    for (i = 0; i < SENSE_CODE_LENGTH; i++)
-//    {
-//      printf(" 0x%x ", sense_b[i]);
-//    }
-//    printf("\n");
-  
-    return -1;
+
+    if (isDebug)
+    {
+      printf("host status %x | driver status %x | status %x\n", io_hdr->host_status, io_hdr->driver_status, io_hdr->status);
+      printf("sense code : ");
+      printf("response code %x | ", response_code);
+      printf("sense key %x | ", sk);
+      printf("additional sense code %x | ", asc);
+      printf("additional sense code Q %x\n", ascq);
+//      for (i = 0; i < SENSE_CODE_LENGTH; i++)
+//      {
+//        printf(" 0x%x ", sense_b[i]);
+//      }
+//      printf("\n");
+    }
+    
+    if (sk != 0 && sk != 1)
+      return -1;
+  }
+  else
+  {
+    if (isDebug)
+      printf("host status %x | driver status %x | status %x\n", io_hdr->host_status, io_hdr->driver_status, io_hdr->status);
+    
+    if (io_hdr->host_status != 0 || io_hdr->driver_status != 0 || io_hdr->status != 0)
+      return -1;
   }
 
   return 0;
