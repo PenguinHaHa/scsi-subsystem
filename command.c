@@ -29,7 +29,7 @@ typedef union _PROBE_HOST_ {
 int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *databuffer, int buffersize);
 int check_status(unsigned char status, unsigned char *sense_b);
 void parse_inquiry_data(unsigned char *buffer, unsigned int len);
-static void parse_mode_page(char *buffer, unsigned int len)
+static void parse_mode_page(char *buffer, unsigned int len);
 
 ///////////////
 // LOCALS
