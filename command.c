@@ -29,6 +29,7 @@ typedef union _PROBE_HOST_ {
 int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *databuffer, int buffersize);
 int check_status(unsigned char status, unsigned char *sense_b);
 void parse_inquiry_data(unsigned char *buffer, unsigned int len);
+static void parse_mode_page(char *buffer, unsigned int len)
 
 ///////////////
 // LOCALS
@@ -282,6 +283,108 @@ int ioctl_test(int fd)
 
   return 0;
 }
+
+// This is a draft version of mode sense function
+// It need be reorganized later
+int sg_mode(int fd)
+{
+  struct sg_io_hdr io_hdr;
+  unsigned char cmd[6];
+  unsigned char sense_b[64];
+  unsigned char databuffer[1024];
+  unsigned int  datalength = 4;
+
+  unsigned int  dbd = 0;   // disable block decriptors bit
+  unsigned int  llbaa = 0; // Long LBA Accepted bit
+  unsigned int  pc = 0;    // page control, 00 : current value
+  unsigned int  pagecode = 0x3f;
+  unsigned int  subpagecode = 0;
+  unsigned int  control = 0;
+
+  memset(sense_b, 0, 64);
+  memset(databuffer, 0, 1024);
+  memset(&io_hdr, 0, sizeof(struct sg_io_hdr));
+
+  // build mode sense 10 command, refer to SPC4, section 6.12 MODE SENSE(10) command
+  cmd[0] = 0x5A;
+  cmd[1] = (dbd ? 0x10 : 0) | (llbaa ? 0x8 : 0);
+  cmd[2] = pc << 6 | pagecode;
+  cmd[3] = subpagecode;
+  cmd[7] = (datalength >> 8) & 0xFF;
+  cmd[8] = datalength & 0xFF;
+  cmd[9] = control;
+  
+  // build sg_io_hdr
+  io_hdr.cmdp = cmd;
+  io_hdr.cmd_len = sizeof(cmd);
+  io_hdr.dxferp = databuffer;
+  io_hdr.dxfer_len = datalength;
+  io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+
+  io_hdr.interface_id = 'S';    // ????
+  io_hdr.mx_sb_len = 64;        // sizeof(sense_b)
+  io_hdr.sbp = sense_b;
+  io_hdr.pack_id = 0;           // ????
+  io_hdr.timeout = 60 * 1000;   // 60 seconds
+
+  // send command
+  if (ioctl(fd, SG_IO, &io_hdr) < 0)
+  {
+    lasterror = errno;
+    printf("Send command failed (%d) - %s\n", lasterror, strerror(lasterror));
+    return -1;
+  }
+
+  // check status
+  if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+    return -1;
+  
+  datalength = (databuffer[0] << 8 | databuffer[1]) + 2;
+  if (datalength > 4)
+  {
+    cmd[7] = (datalength >> 8) & 0xFF;
+    cmd[8] = datalength & 0xFF;
+    // build sg_io_hdr
+    io_hdr.cmdp = cmd;
+    io_hdr.cmd_len = sizeof(cmd);
+    io_hdr.dxferp = databuffer;
+    io_hdr.dxfer_len = datalength;
+    io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+
+    io_hdr.interface_id = 'S';    // ????
+    io_hdr.mx_sb_len = 64;        // sizeof(sense_b)
+    io_hdr.sbp = sense_b;
+    io_hdr.pack_id = 0;           // ????
+    io_hdr.timeout = 60 * 1000;   // 60 seconds
+
+    // send command
+    if (ioctl(fd, SG_IO, &io_hdr) < 0)
+    {
+      lasterror = errno;
+      printf("Send command failed (%d) - %s\n", lasterror, strerror(lasterror));
+      return -1;
+    }
+
+    // check status
+    if (check_status(io_hdr.status, io_hdr.sbp) != 0)
+      return -1;
+  }
+
+  printf("QQQQ datalength %d\n", datalength);
+  parse_mode_page(databuffer, datalength);
+  
+  return 0;
+}
+
+static void parse_mode_page(char *buffer, unsigned int len)
+{
+  printf("mode data length 0x%x%x\n", buffer[0], buffer[1]);
+  printf("medium type 0x%x\n", buffer[2]);
+  printf("device-specific parameter 0x%x\n", buffer[3]);
+  printf("longlba %x\n", buffer[4]);
+  printf("block descriptro length 0x%x%x\n", buffer[6], buffer[7]);
+}
+
 
 int sg_inquiry(int fd)
 {
