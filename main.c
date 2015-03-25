@@ -140,35 +140,40 @@ void scsi_dev(char* const dev_path)
 //  sg_inquiry(scsi_fd);
 
 //  printf("This is ATA COMMAND PASS THROUGH\n");
-  get_identifydata(scsi_fd);
+//  get_identifydata(scsi_fd);
 //  get_smartdata(scsi_fd);
 //  get_smartlogdir(scsi_fd);
-//  read_data(scsi_fd);
+  read_data(scsi_fd);
 
   close(scsi_fd);
 }
 
 void read_data(int fd)
 {
+  int ret;
   unsigned int startlba = 1;
   unsigned int sectors = 1;
   unsigned int ncqtag = 3;
   unsigned int isread = 1;
-  char *databuffer;
+//  unsigned int isread = 0;
+  unsigned char *databuffer;
 
   databuffer = (char *)malloc(512 * sectors);
   memset(databuffer, 0, 512 * sectors);
 
-  fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
-  sectors_readwrite(fd, isread, startlba, sectors, databuffer);
+  ret = fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
+// ret = sectors_readwrite(fd, isread, startlba, sectors, databuffer);
 
-  int i;
-  printf("sector %d: \n", startlba);
-  for (i= 0; i < 512; i++)
+  if (ret == 0 && isread)
   {
-    printf("%d:%x | ", i, databuffer[i]);
-  }
+    int i;
+    printf("sector %d: \n", startlba);
+    for (i= 0; i < 512; i++)
+    {
+      printf("%d:%x | ", i, databuffer[i]);
+    }
   printf("\n");
+  }
 
   free(databuffer);
 }
