@@ -161,6 +161,15 @@ void read_data(int fd)
   databuffer = (char *)malloc(512 * sectors);
   memset(databuffer, 0, 512 * sectors);
 
+  if (isread == 0)
+  {
+    unsigned int input;
+    printf("Wrtie op, it will destroy the current data, press y to continue, or stop with any other key?\n");
+    input = getchar();
+    if (input != 'y')
+      return;
+  }
+
   ret = fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
 // ret = sectors_readwrite(fd, isread, startlba, sectors, databuffer);
 

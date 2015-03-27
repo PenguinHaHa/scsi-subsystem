@@ -116,12 +116,16 @@ int fpdma_readwrite(int fd, unsigned int isread, unsigned int ncqtag, unsigned i
   int ret;
   unsigned char cmd[16];
 
-  int protocol = 7;   // DMA Queued
-  int extend = 0;
-  int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
-  int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
-  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
-  int t_length = 1;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+  unsigned int protocol = 7;   // DMA Queued
+//  unsigned int protocol = 6;   // DMA
+  unsigned int extend = 1;     // lba48, refer to ACS, READ FPDMA QUEUED section, the high 8 bits is used(15:14 PRIO)
+//  unsigned int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  unsigned int ck_cond  = 1;   // SATL always return with CHECK CONDITION
+  unsigned int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
+  unsigned int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  unsigned int t_length = 1;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+  unsigned int prio = 0;       // 00: normal, 01: Isochronous deadline-dependent priority, 10: hight priority, 11: reserved
+  unsigned int fua = 0;        // 1: force to use data from non-volatile media
 
   memset(cmd, 0, sizeof(cmd));
   
@@ -131,11 +135,12 @@ int fpdma_readwrite(int fd, unsigned int isread, unsigned int ncqtag, unsigned i
   cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
   cmd[3] = (sectors >> 8) & 0xFF;        // transferred secotors size, FEATURES high byte
   cmd[4] = sectors & 0xFF;               // transferred sectors size, FEATURES low byte
+  cmd[5] = prio << 14;
   cmd[6] = ncqtag << 3;
   cmd[8] = startlba & 0xFF;
   cmd[10] = (startlba >> 8) & 0xFF;
   cmd[12] = (startlba >> 16) & 0xFF;
-  cmd[13] = 0x40;                         // bit 7 FUA set to zero
+  cmd[13] = (fua << 7) | (1 << 6);       // bit 6 shall be set to one
   cmd[14] = isread ? 0x60 : 0x61;        // 0x60: read fpdma, 0x61 write fpdma
   
   ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, sectors * 512);
@@ -522,7 +527,7 @@ static int check_status(struct sg_io_hdr *io_hdr, unsigned char *sense_b)
       printf("additional sense code Q %x\n", ascq);
 //      for (i = 0; i < SENSE_CODE_LENGTH; i++)
 //      {
-//        printf(" 0x%x ", sense_b[i]);
+//        printf("%d: 0x%x | ", i, sense_b[i]);
 //      }
 //      printf("\n");
     }
