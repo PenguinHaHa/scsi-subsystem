@@ -168,10 +168,23 @@ void read_data(int fd)
     input = getchar();
     if (input != 'y')
       return;
+    
+    databuffer[0]  = 0x11;
+    databuffer[2]  = 0x22;
+    databuffer[4]  = 0x44;
+    databuffer[6]  = 0x66;
+    databuffer[8]  = 0x88;
+    databuffer[10] = 0xaa;
+    
+    databuffer[511] = 0xFF;
+    databuffer[509] = 0xEE;
+    databuffer[507] = 0xDD;
+    databuffer[505] = 0xCC;
+    databuffer[503] = 0xBB;
   }
 
-  ret = fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
-// ret = sectors_readwrite(fd, isread, startlba, sectors, databuffer);
+//  ret = fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
+ ret = sectors_readwrite(fd, isread, startlba, sectors, databuffer);
 
   if (ret == 0 && isread)
   {

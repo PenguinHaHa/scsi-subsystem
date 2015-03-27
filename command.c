@@ -116,8 +116,8 @@ int fpdma_readwrite(int fd, unsigned int isread, unsigned int ncqtag, unsigned i
   int ret;
   unsigned char cmd[16];
 
-  unsigned int protocol = 7;   // DMA Queued
-//  unsigned int protocol = 6;   // DMA
+//  unsigned int protocol = 7;   // DMA Queued, QQQQ: It is DMA QUEUED command as indicated in ACS spec, but it doesn't work
+  unsigned int protocol = 6;   // DMA
   unsigned int extend = 1;     // lba48, refer to ACS, READ FPDMA QUEUED section, the high 8 bits is used(15:14 PRIO)
 //  unsigned int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
   unsigned int ck_cond  = 1;   // SATL always return with CHECK CONDITION
