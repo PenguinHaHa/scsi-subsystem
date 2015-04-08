@@ -42,6 +42,7 @@ unsigned int isDebug = 0;
 
 int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *databuffer, int buffersize)
 {
+  int ret;
   struct sg_io_hdr io_hdr;
   unsigned char sense_b[SENSE_CODE_LENGTH];     // buffer size QQQQ:????
   
@@ -61,10 +62,12 @@ int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *data
   //io_hdr.pack_id = 0           // User can identify the request by using this field
 
   // send command
-  if (ioctl(fd, SG_IO, &io_hdr) < 0)
+  ret = ioctl(fd, SG_IO, &io_hdr);
+  if (ret < 0)
   {
     lasterror = errno;
-    printf("Send command failed (%d) - %s\n", lasterror, strerror(lasterror));
+//    printf("Send command failed (%d) - %s\n", lasterror, strerror(lasterror));
+    printf("ret %d, Send command failed (%d) - %s\n", ret, lasterror, strerror(lasterror));
     return -1;
   }
 
@@ -81,8 +84,8 @@ int sectors_readwrite(int fd, unsigned int isread, unsigned int startlba, unsign
   unsigned char cmd[16];
 
   int protocol = isread ? 4 : 5;
-  int extend = 0;
-  int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int extend = 1;
+  int ck_cond  = 1;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
   int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
   int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
   int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
@@ -93,12 +96,26 @@ int sectors_readwrite(int fd, unsigned int isread, unsigned int startlba, unsign
   cmd[0] = 0x85;
   cmd[1] = (protocol << 1) | extend;
   cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
-  cmd[6] = sectors;
+  cmd[5] = (sectors >> 8) & 0xFF;
+  cmd[6] = sectors & 0xFF;
   cmd[8] = startlba & 0xFF;
   cmd[10] = (startlba >> 8) & 0xFF;
   cmd[12] = (startlba >> 16) & 0xFF;
-  cmd[13] = 0xE0;
-  cmd[14] = isread ? 0x20 : 0x30;
+//  cmd[13] = 0xE0;
+  cmd[13] = 0x40;
+//  cmd[14] = isread ? 0x20 : 0x30;
+  cmd[14] = isread ? 0x24 : 0x34;
+
+  if (isDebug)
+  {
+    int i;
+    printf("cmd:");
+    for (i = 0; i < 16; i++)
+    {
+      printf("0x%02x ", cmd[i]);
+    }
+    printf("\n");
+  }
 
   ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, sectors * 512);
   if (ret != 0)

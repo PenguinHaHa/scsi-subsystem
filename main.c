@@ -18,6 +18,8 @@
 
 typedef struct _PARAMETERS {
   char dev_path[256];
+  int  isread;
+  unsigned int startlba;
 } PARAMETER;
 
 ///////////////
@@ -39,12 +41,15 @@ void read_data(int fd);
 // LOCALS
 ///////////////
 static int lasterror;
-const char* const short_options = "hd:D";
+const char* const short_options = "hd:o:s:D";
 const struct option long_options[] = {
   {"help", 0, NULL, 'h'},
   {"devpath", 1, NULL, 'd'},
+  {"operate", 1, NULL, 'o'},
+  {"startlba", 1, NULL, 's'},
   {"debug", 0, NULL, 'D'}
 };
+PARAMETER scsi_param;
 
 extern unsigned int isDebug;
 ///////////////
@@ -52,7 +57,6 @@ extern unsigned int isDebug;
 ///////////////
 int main(int argc, char* argv[])
 {
-  PARAMETER scsi_param;
 
   printf("This is Penguin's scsi sub-system test\n");
 
@@ -65,8 +69,10 @@ int main(int argc, char* argv[])
 
 void print_usage(void)
 {
-  printf("  -h  --help     Display usage information\n");
-  printf("  -d  --devpath  Specify test scsi device path\n");
+  printf("  -h  --help         Display usage information\n");
+  printf("  -d  --devpath      Specify test scsi device path\n");
+  printf("  -o  --operate=r/w  Specify read/write operetion\n");
+  printf("  -s  --startlba     Specify startlba to read/write\n");
   printf("  -D  --debug    print debug info\n");
 }
 
@@ -81,6 +87,9 @@ void parse_options(PARAMETER *param, int argc, char **argv)
     exit(0);
   }
 
+  param->isread = 1;
+  param->startlba = 0;
+
   do
   {
     option = getopt_long(argc, argv, short_options, long_options, NULL);
@@ -93,6 +102,25 @@ void parse_options(PARAMETER *param, int argc, char **argv)
       case 'd':
         opt_arg = optarg;
         strcpy(param->dev_path, opt_arg);
+        break;
+
+      case 'o':
+        opt_arg = optarg;
+        if (*opt_arg == 'r')
+          param->isread = 1;
+        else if (*opt_arg == 'w')
+          param->isread = 0;
+        else
+        {
+          printf("unsupported operation of option -o\n");
+          print_usage();
+          exit(0);
+        }
+        break;
+
+      case 's':
+        opt_arg = optarg;
+        param->startlba = strtol(opt_arg, NULL, 0);
         break;
 
       case 'D':
@@ -114,6 +142,8 @@ void parse_options(PARAMETER *param, int argc, char **argv)
     printf("Please input device path\n");
     exit(0);
   }
+
+  printf("param, startlba %d, isread %d\n", param->startlba, param->isread);
 }
 
 void scsi_dev(char* const dev_path)
@@ -151,11 +181,10 @@ void scsi_dev(char* const dev_path)
 void read_data(int fd)
 {
   int ret;
-  unsigned int startlba = 1;
-  unsigned int sectors = 1;
+  unsigned int startlba = scsi_param.startlba;
+  unsigned int sectors = 0xf0;                // QQQQ 0xF0 is the max size for USB storage device ????
   unsigned int ncqtag = 3;
-  unsigned int isread = 1;
-//  unsigned int isread = 0;
+  unsigned int isread = scsi_param.isread;
   unsigned char *databuffer;
 
   databuffer = (char *)malloc(512 * sectors);
@@ -184,7 +213,7 @@ void read_data(int fd)
   }
 
 //  ret = fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
- ret = sectors_readwrite(fd, isread, startlba, sectors, databuffer);
+  ret = sectors_readwrite(fd, isread, startlba, sectors, databuffer);
 
   if (ret == 0 && isread)
   {
@@ -192,7 +221,7 @@ void read_data(int fd)
     printf("sector %d: \n", startlba);
     for (i= 0; i < 512; i++)
     {
-      printf("%d:%x | ", i, databuffer[i]);
+      printf("%x ", databuffer[i]);
     }
   printf("\n");
   }
