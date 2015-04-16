@@ -14,6 +14,15 @@
 #define MAX_LENGTH_OUTPUT  512
 #define SENSE_CODE_LENGTH  64
 
+// refer to spec ATA Command Pass-Through
+#define PROTOCOL_HARDRESET   0
+#define PROTOCOL_SRST        1
+#define PROTOCOL_NONDATA     3
+#define PROTOCOL_PIO_DATAIN  4
+#define PROTOCOL_PIO_DATAOUT 5
+#define PROTOCOL_DMA         6
+#define PROTOCOL_DMA_QUEUED  7
+
 // The host associated with the device's fd either has a host dependent information string or failing that its name, output into the given
 // structure. Note that the output starts at the begining of given structure(overwriting the input length).
 // N.B, a trailing '\0' may need to be put on the output string if it has been truncated by the input length.
@@ -78,13 +87,13 @@ int ata_pass_through_data(int fd, int isread, char *cmd, int cmdsize, void *data
   return 0;
 }
 
-int sectors_readwrite(int fd, unsigned int isread, unsigned int startlba, unsigned int sectors, char *databuffer)
+int multi_readwrite(int fd, unsigned int isread, unsigned int isext, unsigned long startlba, unsigned int sectors, char *databuffer)
 {
   int ret;
   unsigned char cmd[16];
 
-  int protocol = isread ? 4 : 5;
-  int extend = 1;
+  int protocol = isread ? PROTOCOL_PIO_DATAIN : PROTOCOL_PIO_DATAOUT;
+  int extend = isext ? 1 : 0;
   int ck_cond  = 1;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
   int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
   int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
@@ -96,15 +105,19 @@ int sectors_readwrite(int fd, unsigned int isread, unsigned int startlba, unsign
   cmd[0] = 0x85;
   cmd[1] = (protocol << 1) | extend;
   cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
-  cmd[5] = (sectors >> 8) & 0xFF;
   cmd[6] = sectors & 0xFF;
   cmd[8] = startlba & 0xFF;
   cmd[10] = (startlba >> 8) & 0xFF;
   cmd[12] = (startlba >> 16) & 0xFF;
-//  cmd[13] = 0xE0;
-  cmd[13] = 0x40;
-//  cmd[14] = isread ? 0x20 : 0x30;
-  cmd[14] = isread ? 0x24 : 0x34;
+  if (isext)
+  {
+    cmd[5]  = (sectors >> 8) & 0xFF;   // hight 8 bit of SECTOR COUNT
+    cmd[7]  = (startlba >> 24) & 0xFF;
+    cmd[9]  = (startlba >> 32) & 0xFF;
+    cmd[11] = (startlba >> 40) & 0xFF;
+  }
+  cmd[13] = 0xE0;
+  cmd[14] = isext ? ((isread ? 0x29 : 0x39)) : (isread ? 0xC4 : 0xC5);
 
   if (isDebug)
   {
@@ -125,16 +138,177 @@ int sectors_readwrite(int fd, unsigned int isread, unsigned int startlba, unsign
   }
 
   return 0;
-  
 }
 
-int fpdma_readwrite(int fd, unsigned int isread, unsigned int ncqtag, unsigned int startlba, unsigned int sectors, char *databuffer)
+int dmaqueued_readwrite(int fd, unsigned int isread, unsigned int isext, unsigned int tag, unsigned long startlba, unsigned int sectors, char *databuffer)
+{
+  int ret;
+  unsigned char cmd[16];
+
+  int protocol = PROTOCOL_DMA_QUEUED;
+  int extend = isext ? 1 : 0;     // 0: 28-bit command, 1 : 48-bit command
+  int ck_cond  = 1;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
+  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  int t_length = 1;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+
+  memset(cmd, 0, sizeof(cmd));
+
+  // build ata pass through command
+  cmd[0] = 0x85;
+  cmd[1] = (protocol << 1) | extend;
+  cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
+  cmd[3] = (sectors >> 8) & 0xFF;
+  cmd[4] = sectors & 0xFF;
+  cmd[6] = (tag & 0x1F) << 3;
+  cmd[8] = startlba & 0xFF;
+  cmd[10] = (startlba >> 8) & 0xFF;
+  cmd[12] = (startlba >> 16) & 0xFF;
+  if (isext)
+  {
+    cmd[7]  = (startlba >> 24) & 0xFF;
+    cmd[9]  = (startlba >> 32) & 0xFF;
+    cmd[11] = (startlba >> 40) & 0xFF;
+  }
+  cmd[13] = 0xE0;
+  cmd[14] = isext ? ((isread ? 0x26 : 0x36)) : (isread ? 0xC7 : 0xCC);
+
+  if (isDebug)
+  {
+    int i;
+    printf("cmd:");
+    for (i = 0; i < 16; i++)
+    {
+      printf("0x%02x ", cmd[i]);
+    }
+    printf("\n");
+  }
+
+  ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, sectors * 512);
+  if (ret != 0)
+  {
+    printf("ERROR, %s: line %d\n", __func__, __LINE__);
+    return -1;
+  }
+
+  return 0;
+}
+
+int dma_readwrite(int fd, unsigned int isread, unsigned int isext, unsigned long startlba, unsigned int sectors, char *databuffer)
+{
+  int ret;
+  unsigned char cmd[16];
+
+  int protocol = PROTOCOL_DMA;
+  int extend = isext ? 1 : 0;     // 0: 28-bit command, 1 : 48-bit command
+  int ck_cond  = 1;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
+  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+
+  memset(cmd, 0, sizeof(cmd));
+
+  // build ata pass through command
+  cmd[0] = 0x85;
+  cmd[1] = (protocol << 1) | extend;
+  cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
+  cmd[6] = sectors & 0xFF;
+  cmd[8] = startlba & 0xFF;
+  cmd[10] = (startlba >> 8) & 0xFF;
+  cmd[12] = (startlba >> 16) & 0xFF;
+  if (isext)
+  {
+    cmd[5]  = (sectors >> 8) & 0xFF;   // hight 8 bit of SECTOR COUNT
+    cmd[7]  = (startlba >> 24) & 0xFF;
+    cmd[9]  = (startlba >> 32) & 0xFF;
+    cmd[11] = (startlba >> 40) & 0xFF;
+  }
+  cmd[13] = 0xE0;
+  cmd[14] = isext ? ((isread ? 0x25 : 0x35)) : (isread ? 0xC8 : 0xCA);
+
+  if (isDebug)
+  {
+    int i;
+    printf("cmd:");
+    for (i = 0; i < 16; i++)
+    {
+      printf("0x%02x ", cmd[i]);
+    }
+    printf("\n");
+  }
+
+  ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, sectors * 512);
+  if (ret != 0)
+  {
+    printf("ERROR, %s: line %d\n", __func__, __LINE__);
+    return -1;
+  }
+
+  return 0;
+}
+
+int sectors_readwrite(int fd, unsigned int isread, unsigned int isext, unsigned long startlba, unsigned int sectors, char *databuffer)
+{
+  int ret;
+  unsigned char cmd[16];
+
+  int protocol = isread ? PROTOCOL_PIO_DATAIN : PROTOCOL_PIO_DATAOUT;
+  int extend = isext ? 1 : 0;
+  int ck_cond  = 1;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
+  int t_dir = isread ? 1 : 0;      // 1: from device, 0: from controller
+  int byt_blok = 1;   // 0: transfer data is measured by byte, 1: measured by block
+  int t_length = 2;   // 0: no daa is transfer, 1: length is specified in FEATURE, 2: specified in SECTOR_COUNT, 3: specified in STPSIU
+
+  memset(cmd, 0, sizeof(cmd));
+
+  // build ata pass through command
+  cmd[0] = 0x85;
+  cmd[1] = (protocol << 1) | extend;
+  cmd[2] = (ck_cond << 5) | (t_dir << 3) | (byt_blok << 2) | t_length;
+  cmd[6] = sectors & 0xFF;
+  cmd[8] = startlba & 0xFF;
+  cmd[10] = (startlba >> 8) & 0xFF;
+  cmd[12] = (startlba >> 16) & 0xFF;
+  if (isext)
+  {
+    cmd[5]  = (sectors >> 8) & 0xFF;   // hight 8 bit of SECTOR COUNT
+    cmd[7]  = (startlba >> 24) & 0xFF;
+    cmd[9]  = (startlba >> 32) & 0xFF;
+    cmd[11] = (startlba >> 40) & 0xFF;
+  }
+  cmd[13] = 0xE0;
+//  cmd[14] = isread ? 0x20 : 0x30;
+  cmd[14] = isread ? 0x24 : 0x34;
+  cmd[14] = isext ? ((isread ? 0x24 : 0x34)) : (isread ? 0x20 : 0x30);
+
+  if (isDebug)
+  {
+    int i;
+    printf("cmd:");
+    for (i = 0; i < 16; i++)
+    {
+      printf("0x%02x ", cmd[i]);
+    }
+    printf("\n");
+  }
+
+  ret = ata_pass_through_data(fd, isread, cmd, sizeof(cmd), databuffer, sectors * 512);
+  if (ret != 0)
+  {
+    printf("ERROR, %s: line %d\n", __func__, __LINE__);
+    return -1;
+  }
+
+  return 0;
+}
+
+int fpdma_readwrite(int fd, unsigned int isread, unsigned int ncqtag, unsigned long startlba, unsigned int sectors, char *databuffer)
 {
   int ret;
   unsigned char cmd[16];
 
 //  unsigned int protocol = 7;   // DMA Queued, QQQQ: It is DMA QUEUED command as indicated in ACS spec, but it doesn't work
-  unsigned int protocol = 6;   // DMA
+  unsigned int protocol = PROTOCOL_DMA;   // DMA
   unsigned int extend = 1;     // lba48, refer to ACS, READ FPDMA QUEUED section, the high 8 bits is used(15:14 PRIO)
 //  unsigned int ck_cond  = 0;   // SATL shall terminate the command with CHECK CONDITION only if an error occurs
   unsigned int ck_cond  = 1;   // SATL always return with CHECK CONDITION

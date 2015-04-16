@@ -25,7 +25,7 @@ typedef enum _OPS {
 typedef struct _PARAMETERS {
   char dev_path[256];
   OPS  operation;
-  unsigned int startlba;
+  unsigned long startlba;
 } PARAMETER;
 
 ///////////////
@@ -146,7 +146,7 @@ void parse_options(PARAMETER *param, int argc, char **argv)
   } while (option != -1);
 
   if (isDebug)
-    printf("OPTIONS : dev_path %s, operation %x, startlba %x\n", param->dev_path, param->operation, param->startlba); 
+    printf("OPTIONS : dev_path %s, operation %x, startlba %lx\n", param->dev_path, param->operation, param->startlba); 
 }
 
 void scsi_dev(char* const dev_path)
@@ -187,11 +187,16 @@ void scsi_dev(char* const dev_path)
 void read_data(int fd)
 {
   int ret;
-  unsigned int startlba = scsi_param.startlba;
-  unsigned int sectors = 1;                // QQQQ For USB storage device, this field is a little weird, different kind of device has differrent max value of this field (0xF0, 1, ...)
-  unsigned int ncqtag = 3;
-  unsigned int isread = (scsi_param.operation == OP_READ) ? 1 : 0;
   unsigned char *databuffer;
+  unsigned long startlba = scsi_param.startlba;
+  unsigned int isread = (scsi_param.operation == OP_READ) ? 1 : 0;
+ 
+  // user adjustment paramters
+  unsigned int sectors = 1;                // QQQQ For USB storage device, this field is a little weird, different kind of device has differrent max value of this field (0xF0, 1, ...)
+  unsigned int ncqtag  = 3;
+  unsigned int tag     = 3;
+  unsigned int isext   = 1;
+//  unsigned int isext   = 0;
 
   databuffer = (char *)malloc(512 * sectors);
   memset(databuffer, 0, 512 * sectors);
@@ -219,12 +224,15 @@ void read_data(int fd)
   }
 
 //  ret = fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
-  ret = sectors_readwrite(fd, isread, startlba, sectors, databuffer);
+  ret = sectors_readwrite(fd, isread, isext, startlba, sectors, databuffer);
+//  ret = dma_readwrite(fd, isread, isext, startlba, sectors, databuffer);
+//  ret = dmaqueued_readwrite(fd, isread, isext, tag, startlba, sectors, databuffer);
+//  ret = multi_readwrite(fd, isread, isext, startlba, sectors, databuffer);
 
   if (ret == 0 && isread)
   {
     int i;
-    printf("sector %d: \n", startlba);
+    printf("sector %ld: \n", startlba);
     for (i= 0; i < 512; i++)
     {
       printf("%x ", databuffer[i]);
@@ -368,6 +376,15 @@ void parse_identify_data(unsigned char *buffer, unsigned int len)
     printf("Streaming feature set is support\n");
   else
     printf("Streaming feature set is NOT support\n");
+
+  // Multiple read & write, WORD 59
+  if (isDebug)
+    printf("\nDEBUG, bit 4 of word[59] %x\n", iden[59]);
+  if (iden[59] & (1 << 8))
+    printf("Number of logical sectors per DRQ data block for R/W Multiple command %x\n", iden[59] & 0xFF);
+  else
+    printf("Multiple logical sector setting is valid");
+
 }
 
 int check_file_state(int fd)
