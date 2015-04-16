@@ -16,9 +16,15 @@
 
 #include "command.h"
 
+typedef enum _OPS {
+  OP_READ = 0,
+  OP_WRITE,
+  OP_IDENTIFY
+} OPS;
+
 typedef struct _PARAMETERS {
   char dev_path[256];
-  int  isread;
+  OPS  operation;
   unsigned int startlba;
 } PARAMETER;
 
@@ -69,11 +75,11 @@ int main(int argc, char* argv[])
 
 void print_usage(void)
 {
-  printf("  -h  --help         Display usage information\n");
-  printf("  -d  --devpath      Specify test scsi device path\n");
-  printf("  -o  --operate=r/w  Specify read/write operetion\n");
-  printf("  -s  --startlba     Specify startlba to read/write\n");
-  printf("  -D  --debug    print debug info\n");
+  printf("  -h  --help          Display usage information\n");
+  printf("  -d  --devpath       Specify test scsi device path\n");
+  printf("  -o  --operate=r/w/i Specify read/write operetion\n");
+  printf("  -s  --startlba      Specify startlba to read/write\n");
+  printf("  -D  --debug         print debug info\n");
 }
 
 void parse_options(PARAMETER *param, int argc, char **argv)
@@ -87,7 +93,7 @@ void parse_options(PARAMETER *param, int argc, char **argv)
     exit(0);
   }
 
-  param->isread = 1;
+  param->operation = OP_IDENTIFY;
   param->startlba = 0;
 
   do
@@ -107,9 +113,11 @@ void parse_options(PARAMETER *param, int argc, char **argv)
       case 'o':
         opt_arg = optarg;
         if (*opt_arg == 'r')
-          param->isread = 1;
+          param->operation = OP_READ;
         else if (*opt_arg == 'w')
-          param->isread = 0;
+          param->operation = OP_WRITE;
+        else if (*opt_arg == 'i')
+          param->operation = OP_IDENTIFY;
         else
         {
           printf("unsupported operation of option -o\n");
@@ -137,13 +145,8 @@ void parse_options(PARAMETER *param, int argc, char **argv)
     }
   } while (option != -1);
 
-  if (param->dev_path == NULL)
-  {
-    printf("Please input device path\n");
-    exit(0);
-  }
-
-  printf("param, startlba %d, isread %d\n", param->startlba, param->isread);
+  if (isDebug)
+    printf("OPTIONS : dev_path %s, operation %x, startlba %x\n", param->dev_path, param->operation, param->startlba); 
 }
 
 void scsi_dev(char* const dev_path)
@@ -160,7 +163,7 @@ void scsi_dev(char* const dev_path)
     printf("Open %s failed (%d) - %s\n", dev_path, lasterror, strerror(lasterror));
     exit(-1);
   }
-
+  
 //  printf("Check file state:\n");
 //  check_file_state(scsi_fd);
   
@@ -170,10 +173,13 @@ void scsi_dev(char* const dev_path)
 //  sg_inquiry(scsi_fd);
 
 //  printf("This is ATA COMMAND PASS THROUGH\n");
-//  get_identifydata(scsi_fd);
 //  get_smartdata(scsi_fd);
 //  get_smartlogdir(scsi_fd);
-  read_data(scsi_fd);
+  if (scsi_param.operation == OP_IDENTIFY)
+    get_identifydata(scsi_fd);
+  
+  if (scsi_param.operation == OP_READ || scsi_param.operation == OP_WRITE)
+    read_data(scsi_fd);
 
   close(scsi_fd);
 }
@@ -184,7 +190,7 @@ void read_data(int fd)
   unsigned int startlba = scsi_param.startlba;
   unsigned int sectors = 1;                // QQQQ For USB storage device, this field is a little weird, different kind of device has differrent max value of this field (0xF0, 1, ...)
   unsigned int ncqtag = 3;
-  unsigned int isread = scsi_param.isread;
+  unsigned int isread = (scsi_param.operation == OP_READ) ? 1 : 0;
   unsigned char *databuffer;
 
   databuffer = (char *)malloc(512 * sectors);
@@ -293,10 +299,75 @@ void get_identifydata(int fd)
 
 void parse_identify_data(unsigned char *buffer, unsigned int len)
 {
+  unsigned short *iden;
 
-  printf("Identify data: \n");
-  printf("Serial number %s\n", buffer + 20);
-  printf("Model number %s\n", buffer + 54);
+  iden = (unsigned short*)buffer;
+
+  if (isDebug)
+    printf("\nDEBUG, word[0] %x\n", iden[0]);
+  printf("%s Identify data:\n", iden[0] >> 15 ? "ATAPI" : "ATA");
+  printf("Serial number %s\n", (unsigned char *)(iden + 10));
+  printf("Model number %s\n", (unsigned char *)(iden + 27));
+
+  // PACKET feature set, bit 4 of WORD 82 & 85, 1 : support while 0 : unsupport
+  if (isDebug)
+    printf("\nDEBUG, bit 4 of word[82] %x, bit 4 of word[85] %x\n", iden[82], iden[85]);
+  if ((iden[82] & (1 << 4)) && ((iden[85] & (1 << 4))))
+    printf("PACKET feature set is supported\n");
+  else
+    printf("PACKET feature set is NOT supported\n");
+
+  // bit 12:8 indicate command set used by PACKET command, valid for ATAPI device
+  if (iden[0] >> 15)
+  {
+    if (isDebug)
+      printf("\nDEBUG, bit 12:8 of word[0] %x\n", iden[0]);
+    printf("COMMAND set %x\n", (iden[0] >> 8) & 0x1F);
+  }
+
+  // 48-bit Address feature set, bit 10 of WORD 83 & 86, 1 : support while. Only in IDENTIFY DATA
+  if (isDebug)
+    printf("\nDEBUG, bit 10 0f word[83] %x, bit 10 of word[86] %x\n", iden[83], iden[86]);
+  if ((iden[83] & (1 << 10)) && ((iden[86] & (1 << 10))))
+    printf("48-bit Address feature set is supported\n");
+  else
+    printf("48-bit Address feature set is NOT supported\n");
+  
+  if (isDebug)
+    printf("\nDEBUG, word[60] %x, word[61] %x\n", iden[60], iden[61]);
+  printf("Total number of user addressable logical sectors for 28-bit commands %x%x\n", iden[61], iden[60]);
+  if (isDebug)
+    printf("\nDEBUG, word[100] %x, word[101] %x, word[102] %x, word[103] %x\n", iden[100], iden[101], iden[102], iden[103]);
+  printf("Total number of user addressable logical sectors for 48-bit commands %x%x%x%x\n", iden[103], iden[102], iden[101], iden[100]);
+
+  // NCQ(Native Command Queuing) feature set, bit 8 of WORD 76, 1 : support while 0 : unsupport
+  if (isDebug)
+    printf("\nDEBUG, bit 8 of word[76] %x\n", iden[76]);
+  if (iden[76] & (1 << 8))
+    printf("NCQ feature set is support\n");
+  else
+    printf("NCQ feature set is NOT support\n");
+
+  // TCQ(Tagged Command Queuing) feature set, bit 1 of WORD 83 & 86, 1 : support while 0 : unsupport. Only in IDENTIFY DATA
+  if (isDebug)
+    printf("\nDEBUG, bit 1 of word[83] %x, bit 1 of word[86] %x\n", iden[83], iden[86]);
+  if ((iden[83] & (1 << 1)) && (iden[86] & (1 << 1)))
+    printf("TCQ feature set is support\n");
+  else
+    printf("TCQ feature set is NOT support\n");
+
+  // Queue depth for TCQ/NCQ, bit 4:0 of WORD 75
+  if (isDebug)
+    printf("\nDEBUG, bit 4:0 of word[75] %x\n", iden[75]);
+  printf("queue depth %x\n", (iden[75] & 0x1F) + 1);
+
+  // Streaming feature set, bit 4 of WORD 84, 1 : support while 0 : unsupport. 48-bit address only
+  if (isDebug)
+    printf("\nDEBUG, bit 4 of word[84] %x\n", iden[84]);
+  if (iden[84] & (1 << 4))
+    printf("Streaming feature set is support\n");
+  else
+    printf("Streaming feature set is NOT support\n");
 }
 
 int check_file_state(int fd)
