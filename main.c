@@ -182,7 +182,7 @@ void read_data(int fd)
 {
   int ret;
   unsigned int startlba = scsi_param.startlba;
-  unsigned int sectors = 0xf0;                // QQQQ 0xF0 is the max size for USB storage device ????
+  unsigned int sectors = 1;                // QQQQ For USB storage device, this field is a little weird, different kind of device has differrent max value of this field (0xF0, 1, ...)
   unsigned int ncqtag = 3;
   unsigned int isread = scsi_param.isread;
   unsigned char *databuffer;
