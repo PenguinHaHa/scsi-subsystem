@@ -28,20 +28,35 @@ typedef struct _PARAMETERS {
   unsigned long startlba;
 } PARAMETER;
 
+typedef struct _ATA_FEATURE {
+  int isata;
+  int packet_feat;
+  int cmdset;
+  int ext_feat;
+  long long totalsec;
+  int tcq_feat;
+  int ncq_feat;
+  int queuedepth;
+  int stream_feat;
+  int secperdrq;
+} ATA_FEATURE;
+
 ///////////////
 // PROTOTYPES
 ///////////////
 void parse_options(PARAMETER *param, int argc, char **argv);
 void print_usage(void);
 void scsi_dev(char* const dev_path);
-int check_file_state(int fd);
+int  check_file_state(int fd);
 void parse_identify_data(unsigned char *buffer, unsigned int len);
+void set_ata_feat(void *buffer, unsigned int len);
 void get_identifydata(int fd);
+void list_identifydata(int fd);
 void parse_smart_data(unsigned char *buffer, unsigned int len);
 void get_smartdata(int fd);
 void get_smartlogdir(int fd);
 void parse_smart_log(unsigned char *buffer, unsigned int len);
-void read_data(int fd);
+void rw_data(int fd);
 
 ///////////////
 // LOCALS
@@ -56,6 +71,7 @@ const struct option long_options[] = {
   {"debug", 0, NULL, 'D'}
 };
 PARAMETER scsi_param;
+ATA_FEATURE ata_feat;
 
 extern unsigned int isDebug;
 ///////////////
@@ -176,17 +192,20 @@ void scsi_dev(char* const dev_path)
 //  get_smartdata(scsi_fd);
 //  get_smartlogdir(scsi_fd);
   if (scsi_param.operation == OP_IDENTIFY)
-    get_identifydata(scsi_fd);
+    list_identifydata(scsi_fd);
   
   if (scsi_param.operation == OP_READ || scsi_param.operation == OP_WRITE)
-    read_data(scsi_fd);
+  {
+    get_identifydata(scsi_fd);
+    rw_data(scsi_fd);
+  }
 
   close(scsi_fd);
 }
 
-void read_data(int fd)
+void rw_data(int fd)
 {
-  int ret;
+  int ret = -1;
   unsigned char *databuffer;
   unsigned long startlba = scsi_param.startlba;
   unsigned int isread = (scsi_param.operation == OP_READ) ? 1 : 0;
@@ -223,11 +242,29 @@ void read_data(int fd)
     databuffer[503] = 0xBB;
   }
 
-//  ret = fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
+  if (!ata_feat.ext_feat && isext)
+  {
+    printf("48-bit feature is NOT supported\n");
+    return;
+  }
+
   ret = sectors_readwrite(fd, isread, isext, startlba, sectors, databuffer);
 //  ret = dma_readwrite(fd, isread, isext, startlba, sectors, databuffer);
-//  ret = dmaqueued_readwrite(fd, isread, isext, tag, startlba, sectors, databuffer);
-//  ret = multi_readwrite(fd, isread, isext, startlba, sectors, databuffer);
+
+//  if (ata_feat.ext_feat && ata_feat.ncq_feat)
+//    ret = fpdma_readwrite(fd, isread, ncqtag, startlba, sectors, databuffer);
+//  else
+//    printf("Feature NOT support, 48-bit feature %d, NCQ feature %d\n", ata_feat.ext_feat, ata_feat.ncq_feat);
+
+//  if (ata_feat.tcq_feat)
+//    ret = dmaqueued_readwrite(fd, isread, isext, tag, startlba, sectors, databuffer);
+//  else
+//    printf("Feature NOT support, TCQ feature %d\n", ata_feat.tcq_feat);
+
+//  if (ata_feat.secperdrq != -1 && ata_feat != 0)
+//    ret = multi_readwrite(fd, isread, isext, startlba, sectors, databuffer);
+//  else
+//    printf("No valid value of Sectors transferred per DRQ or the value is 0\n");
 
   if (ret == 0 && isread)
   {
@@ -302,7 +339,81 @@ void get_identifydata(int fd)
 
   identify_func(fd, identifydata);
   
+  set_ata_feat(identifydata, 512);
+}
+
+void list_identifydata(int fd)
+{
+  char *identifydata;
+
+  identifydata = (char *)malloc(512);
+  memset(identifydata, 0, 512);
+
+  identify_func(fd, identifydata);
+  
   parse_identify_data(identifydata, 512);
+}
+
+void set_ata_feat(void *buffer, unsigned int len)
+{
+  unsigned short *iden;
+
+  iden = (unsigned short*)buffer;
+
+  ata_feat.isata = iden[0] >> 15 ? 0 : 1;
+
+  // PACKET feature set, bit 4 of WORD 82 & 85, 1 : support while 0 : unsupport
+  if ((iden[82] & (1 << 4)) && ((iden[85] & (1 << 4))))
+    ata_feat.packet_feat = 1;
+  else
+    ata_feat.packet_feat = 0;
+
+  // bit 12:8 indicate command set used by PACKET command, valid for ATAPI device
+  if (!ata_feat.isata)
+    ata_feat.cmdset = (iden[0] >> 8) & 0x1F;
+  else
+    ata_feat.cmdset = -1;
+  
+  // 48-bit Address feature set, bit 10 of WORD 83 & 86, 1 : support while. Only in IDENTIFY DATA
+  if ((iden[83] & (1 << 10)) && ((iden[86] & (1 << 10))))
+    ata_feat.ext_feat = 1;
+  else
+    ata_feat.ext_feat = 0;
+
+  if (ata_feat.ext_feat)
+    ata_feat.totalsec = ((unsigned long)iden[103] << 48) || ((unsigned long)iden[102] << 32) || (iden[101] << 16) || iden[100];
+  else
+    ata_feat.totalsec = (iden[61] << 16) || iden[60];
+
+  // NCQ(Native Command Queuing) feature set, bit 8 of WORD 76, 1 : support while 0 : unsupport
+  if (iden[76] & (1 << 8))
+    ata_feat.ncq_feat = 1;
+  else
+    ata_feat.ncq_feat = 0;
+
+  // TCQ(Tagged Command Queuing) feature set, bit 1 of WORD 83 & 86, 1 : support while 0 : unsupport. Only in IDENTIFY DATA
+  if ((iden[83] & (1 << 1)) && (iden[86] & (1 << 1)))
+    ata_feat.tcq_feat = 1;
+  else
+    ata_feat.tcq_feat = 0;
+
+  // Queue depth for TCQ/NCQ, bit 4:0 of WORD 75
+  if (ata_feat.tcq_feat || ata_feat.ncq_feat)
+    ata_feat.queuedepth = (iden[75] & 0x1F) + 1;
+  else
+    ata_feat.queuedepth = -1;
+
+  // Streaming feature set, bit 4 of WORD 84, 1 : support while 0 : unsupport. 48-bit address only
+  if (iden[84] & (1 << 4))
+    ata_feat.stream_feat = 1;
+  else
+    ata_feat.stream_feat = 0;
+
+  // Multiple read & write, WORD 59
+  if (iden[59] & (1 << 8))
+    ata_feat.secperdrq = iden[59] & 0xFF;
+  else
+    ata_feat.secperdrq = -1;
 }
 
 void parse_identify_data(unsigned char *buffer, unsigned int len)
